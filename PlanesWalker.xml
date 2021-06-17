@@ -12,7 +12,7 @@
 	purpose="Track down mobs in upper and lower planes when targeted by Search &amp; Destroy"
 	save_state="y"
 	date_written="2021-06-16 21:37:30"
-	requires="5.07"
+	requires="5.00"
 	version="1.0"
 	>
 </plugin>
@@ -21,8 +21,10 @@
 <![CDATA[
 
 local json = require 'json'
+require 'gmcphelper'
 
 local PLUGINS = {
+	GMCP_HANDLER 		= "3e7dedbe37e44942dd46d264",
 	SND					= "30000000537461726c696e67",
 }
 
@@ -98,7 +100,27 @@ local debug_mode = toboolean(GetVariable("debug_mode") or false)
 local current_target
 local last_pools
 
+
+local search_start_time
+local DELAYED_SEARCH_TIMEOUT = 5 -- 5 seconds
+
 function OnPluginInstall()
+	ColourNote(LOG_COLORS.INFO, "", string.rep("=", 80))
+	Tell(string.rep(" ", 29))
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "PlanesWalker ",
+		LOG_COLORS.INFO, "", "installed")
+	print("")
+	Tell(string.rep(" ", 25))
+	ColourNote(LOG_COLORS.INFO, "", "Type ",
+		LOG_COLORS.INFO_HIGHLIGHT, "", "pw help ",
+		LOG_COLORS.INFO, "", "for instructions")
+
+	if not check_snd() then
+		ColourNote(LOG_COLORS.INFO, "", "This plugin requires Crowley's Search and Destroy v5.81 or greater for full use.")
+	end
+
+	ColourNote(LOG_COLORS.INFO, "", string.rep("=", 80))
+	print("")
 end
 
 function check_snd()
@@ -135,8 +157,11 @@ function target_changed()
 	local target = json.decode(target_json)
 
 	if target_in_planes(target) then
-		current_target = target
-		execute_mob_search(target.name, true)
+		current_target = {
+			name = target.name,
+			exact = true
+		}
+		search_start_time = os.clock()
 	else
 		clear_target()
 	end
@@ -144,7 +169,7 @@ end
 
 function clear_target()
 	DebugNote("Target cleared")
-	if target_in_planes(current_target) then
+	if current_target then
 		DebugNote("Last target was in planes. Clearing pools options.")
 		last_pools = nil
 	end
@@ -154,14 +179,6 @@ end
 
 function enter_pool_alias(name, line, wildcards)
 	enter_pool(tonumber(wildcards.pool_num))
-end
-
-function enter_first_pool()
-	if last_pools and #last_pools > 0 then
-		enter_pool(last_pools[1].pool)
-	else
-		Execute(string.format("mapper goto %i", POOL_START_ROOM))
-	end
 end
 
 function choose_pool_option(name, line, wildcards)
@@ -184,14 +201,64 @@ function enter_pool(pool_num)
 	Execute("enter pool")
 end
 
-function mob_search(name, line, wildcards)
-	execute_mob_search(wildcards.name:lower(), false)
+function show_target_list()
+	if current_target then
+		execute_mob_search(current_target)
+	else
+		InfoNote("No target selected. Search for a target with ", "pw <mob name>", " or select a target from Search and Destroy and try again.")
+	end
 end
 
-function execute_mob_search(search_name, exact)
+function mob_search(name, line, wildcards)
+	current_target = {
+		name = wildcards.name:lower(),
+		exact = false,
+	}
+	execute_mob_search(current_target)
+end
+
+function do_target_search()
+	if current_target then
+		execute_mob_search(current_target)
+	end
+end
+
+function execute_search_in_planes()
+	if not search_start_time then
+		return
+	elseif not current_target then
+		search_start_time = nil
+		return
+	elseif os.clock() >= search_start_time + DELAYED_SEARCH_TIMEOUT  then
+		DebugNote("Took too long to get to planes, showing search now")
+		search_start_time = nil
+		execute_mob_search(current_target)
+		return
+	end
+
+	local room = gmcp("room.info")
+
+	if in_planes(room) then
+		execute_mob_search(current_target)
+		search_start_time = nil
+	end
+end
+
+function in_planes(room)
+	if room.zone == "uplanes" or room.zone == "lplanes" then
+		return true
+	elseif room.zone == "amusement" then
+		local room_id = tonumber(room.num)
+		return room_id and room_id >= POOL_START_ROOM and room_id <= POOL_START_ROOM + 14
+	else
+		return false
+	end
+end
+
+function execute_mob_search(target)
 	local matches = {}
 	for name, pool in pairs(MOB_LOCATIONS) do
-		if (exact and search_name == name) or (not exact and name:find(search_name)) then
+		if (target.exact and target.name == name) or (not target.exact and name:find(target.name)) then
 			if type(pool) == "table" then
 				for i, p in ipairs(pool) do
 					table.insert(matches, { name = name, pool = p })
@@ -203,7 +270,7 @@ function execute_mob_search(search_name, exact)
 	end
 
 	if #matches == 0 then
-		InfoNote("No matches found in any planes map found for ", search_name)
+		InfoNote("No matches found in any planes map found for ", target.name)
 		last_pools = nil
 		return
 	end
@@ -237,11 +304,41 @@ function execute_mob_search(search_name, exact)
 		print("")
 	end
 	ColourNote("#808080", "", string.rep("-", 36))
-	log_with_alternating_note({"Use ", "pw <num>", " to enter the pool for that mob."}, LOG_COLORS.INFO, LOG_COLORS.INFO_HIGHLIGHT)
+	log_with_alternating_note({"Use ", "pw <num>", " to enter the pool for that mob.\n"}, LOG_COLORS.INFO, LOG_COLORS.INFO_HIGHLIGHT)
 end
 
 function upcase_first_char(str)
 	return str:sub(1,1):upper() .. str:sub(2)
+end
+
+function show_help()
+	print("")
+	ColourNote(LOG_COLORS.INFO, "", string.rep("=", 80))
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "PlanesWalker:",
+		LOG_COLORS.INFO, "", " A mod for helping to find mobs in upper and lower planes.")
+	print("")
+	ColourNote(LOG_COLORS.INFO, "", "With Crowley's Search and Destroy v5.81 and later, it will automatically detect")
+	ColourNote(LOG_COLORS.INFO, "", "when you have targeted a mob in the upper or lower planes.")
+	print("")
+	ColourNote(LOG_COLORS.INFO, "", "Commands:")
+	print("")
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "pw",
+		LOG_COLORS.INFO, "", " When you have a target in the planes it will show the table with its\n    location again.")
+	print("")
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "pw <num>",
+		LOG_COLORS.INFO, "", " When you have a target, it will take you the pool on that line of the\n    table.")
+	print("")
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "pw <mob name>",
+		LOG_COLORS.INFO, "", " Searches for the given mob in the upper and lower planes,\n    displaying their pool location if found.")
+	print("")
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "pw pool <1-14>",
+		LOG_COLORS.INFO, "", " Runs to and enter the pool with the given number.")
+	print("")
+	print("")
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "NOTE:",
+		LOG_COLORS.INFO, "", " For this to work correctly you need an amulet of the planes registered in\nyour mapper portals.")
+	ColourNote(LOG_COLORS.INFO, "", string.rep("=", 80))
+	print("")
 end
 
 -- Logging
@@ -299,25 +396,36 @@ end
 ]]>
 </script>
 
-<triggers>
-
-</triggers>
+<timers>
+	<timer name="wait_area_timer"
+		second="0.5" active_closed="y"
+		script="execute_search_in_planes"
+		enabled="y" send_to="12" > </timer>
+</timers>
 <aliases>
 	<alias match="^pw pool (?<pool_num>\d+)$"
 		script="enter_pool_alias"
 		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
 
 	<alias match="^pw$"
-		script="enter_first_pool"
+		script="show_target_list"
 		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
 
 	<alias match="^pw (?<opt>\d+)$"
 		script="choose_pool_option"
 		enabled="y" regexp="y" sequence="200" ignore_case="y" send_to="12" />
 
-	<alias match="^pw (?<name>[a-z].*)$"
+	<alias match="^pw (?<name>.*)$"
 		script="mob_search"
-		enabled="y" regexp="y" sequence="200" ignore_case="y" send_to="12" />
+		enabled="y" regexp="y" sequence="201" ignore_case="y" send_to="12" />
+
+	<alias match="^pw help$"
+		script="show_help"
+		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
+
+	<alias match="^pw exact_target_search$"
+		script="do_target_search"
+		enabled="y" regexp="y" sequence="201" ignore_case="y" send_to="12" />
 
 <!-- Development -->
 	<alias match="^pw reload$"
