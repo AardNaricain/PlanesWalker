@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="iso-8859-1"?>
+<!DOCTYPE muclient>
+<!-- Saved on Wednesday, June 16, 2021, 9:38 PM -->
+<!-- MuClient version 5.07-pre -->
+
+<muclient>
+<plugin
+	name="PlanesWalker"
+	author="Naricain"
+	id="9a82dd8c5913e1aba415a6a2"
+	language="Lua"
+	purpose="Track down mobs in upper and lower planes when targeted by Search &amp; Destroy"
+	save_state="y"
+	date_written="2021-06-16 21:37:30"
+	requires="5.07"
+	version="1.0"
+	>
+</plugin>
+
+<script>
+<![CDATA[
+
+local json = require 'json'
+
+local PLUGINS = {
+	SND					= "30000000537461726c696e67",
+}
+
+-- Pool room is 29364 + pool num (starting at 1)
+local POOL_START_ROOM = 29364
+local MAX_POOL = 14
+
+local MOB_LOCATIONS = {
+	["a paladin einheriar"]		= 1,
+	["a psionic einheriar"]		= 1,
+	["a cleric einheriar"]		= 1,
+	["a ranger einheriar"]		= 1,
+	["a warrior einheriar"]		= 1,
+	["a thief einheriar"]		= 1,
+	["a mage einheriar"]		= 1,
+	["a titan"]					= 1,
+	["a per"]					= 1,
+	["a bariaur"]				= 1,
+	["a malelephant"]			= 2,
+	["a nightmare"]				= 2,
+	["a larva"]					= 2,
+	["a hordling"]				= 3,
+	["a yagnoloth"]				= 3,
+	["a night hag"]				= 3,
+	["an ultroloth"]			= {4, 5},
+	["an arcanaloth"]			= 4,
+	["a dergholoth"]			= {4, 5},
+	["a hydroloth"]				= {4, 5},
+	["a mezzoloth"]				= {4, 5},
+	["a psicloth"]				= {4, 5},
+	["a nycaloth"]				= {4, 5},
+	["a vaporighu"]				= 4,
+	["general of gehenna"]		= 4,
+	["an adamantite dragon"]	= 6,
+	["an air sentinel"]			= 6,
+	["a monadic deva"]			= 6,
+	["an agathinon aasimon"]	= 7,
+	["an astral deva"]			= 7,
+	["a translator"]			= 7,
+	["a t'uen-rin"]				= 7,
+	["a tuen-rin"]				= 7,
+	["a lantern archon"]		= 8,
+	["a tome archon"]			= 8,
+	["a noctral"]				= 8,
+	["a planetar aasimon"]		= 8,
+	["a warden archon"]			= 8,
+	["a hound archon"]			= 8,
+	["a sword archon"]			= 8,
+	["a zoveri"]				= 8,
+	["a light aasimon"]			= 10,
+	["a solar aasimon"]			= 10,
+	["a movanic deva"]			= 10,
+	["a balanea"]				= 10,
+	["a phoenix"]				= 10,
+	["a moon dog"]				= 10,
+	["a mortai"]				= 11,
+	["an animal spirit"]		= 11,
+	["an animal lord"]			= 11,
+	["a warden beast"]			= 11,
+}
+
+
+function toboolean(val)
+	if not val or val == "false" then
+		return false
+	else
+		return true
+	end
+end
+
+local debug_mode = toboolean(GetVariable("debug_mode") or false)
+
+local current_target
+local last_pools
+
+function OnPluginInstall()
+end
+
+function check_snd()
+	-- Check SnD is enabled and version >= 5.81
+	return GetPluginInfo(PLUGINS.SND, 17) and GetPluginInfo(PLUGINS.SND, 19) >= 5.81
+end
+
+function OnPluginBroadcast(msg, id, name, text)
+	if id == PLUGINS.SND then
+		if text == 'target_changed' then
+			target_changed()
+		elseif text == "target_cleared" then
+			clear_target()
+		end
+	end
+end
+
+function target_in_planes(target)
+	if not target then
+		return false
+	else
+		return target.area == 'uplanes' or target.area == "lplanes"
+	end
+end
+
+function target_changed()
+	local ret, target_json = CallPlugin(PLUGINS.SND, "target_as_json")
+	if ret > 0 then
+		DebugNote("SnD target_as_json returned error code ", ret)
+		clear_target()
+		return
+	end
+
+	local target = json.decode(target_json)
+
+	if target_in_planes(target) then
+		current_target = target
+		execute_mob_search(target.name, true)
+	else
+		clear_target()
+	end
+end
+
+function clear_target()
+	DebugNote("Target cleared")
+	if target_in_planes(current_target) then
+		DebugNote("Last target was in planes. Clearing pools options.")
+		last_pools = nil
+	end
+	current_target = nil
+end
+
+
+function enter_pool_alias(name, line, wildcards)
+	enter_pool(tonumber(wildcards.pool_num))
+end
+
+function enter_first_pool()
+	if last_pools and #last_pools > 0 then
+		enter_pool(last_pools[1].pool)
+	else
+		Execute(string.format("mapper goto %i", POOL_START_ROOM))
+	end
+end
+
+function choose_pool_option(name, line, wildcards)
+	local option = tonumber(wildcards.opt)
+
+	if not last_pools or not last_pools[option] then
+		InfoNote("No pool ", option, " found. Try running ", "am <mob name>", " to search for a mob in upper and lower planes.")
+		return
+	end
+
+	enter_pool(last_pools[option].pool)
+end
+
+function enter_pool(pool_num)
+	if pool_num < 1 or pool_num > MAX_POOL then
+		InfoNote("Pool must be between ", 1, " and ", MAX_POOL)
+		return
+	end
+	Execute(string.format("mapper goto %i", POOL_START_ROOM + pool_num))
+	Execute("enter pool")
+end
+
+function mob_search(name, line, wildcards)
+	execute_mob_search(wildcards.name:lower(), false)
+end
+
+function execute_mob_search(search_name, exact)
+	local matches = {}
+	for name, pool in pairs(MOB_LOCATIONS) do
+		if (exact and search_name == name) or (not exact and name:find(search_name)) then
+			if type(pool) == "table" then
+				for i, p in ipairs(pool) do
+					table.insert(matches, { name = name, pool = p })
+				end
+			else
+				table.insert(matches, { name = name, pool = pool })
+			end
+		end
+	end
+
+	if #matches == 0 then
+		InfoNote("No matches found in any planes map found for ", search_name)
+		last_pools = nil
+		return
+	end
+
+	local match_sorter = function(a, b)
+		if a.pool < b.pool then
+			return true
+		elseif a.pool > b.pool then
+			return false
+		else
+			return a.name < b.name
+		end
+	end
+
+	table.sort(matches, match_sorter)
+	last_pools = matches
+
+	print("")
+	ColourNote("#808080", "", string.format("%3s  %-25s  %-4s", "Num", "Mob", "Pool"))
+	ColourNote("#808080", "", string.rep("-", 36))
+	local background, command, tooltip
+
+	for i, match in ipairs(matches) do
+		background = (i % 2) == 0 and "#000040" or ""
+		command = string.format("pw %i", i)
+		tooltip = string.format("Enter pool %i", match.pool)
+
+		Hyperlink(command, string.format("%3i  ", i), tooltip, LOG_COLORS.INFO_HIGHLIGHT, background, false, true)
+		Hyperlink(command, string.format("%-25s  ", upcase_first_char(match.name)), tooltip, LOG_COLORS.INFO, background, false, true)
+		Hyperlink(command, string.format("%-4i", match.pool), tooltip, LOG_COLORS.INFO_HIGHLIGHT, background, false, true)
+		print("")
+	end
+	ColourNote("#808080", "", string.rep("-", 36))
+	log_with_alternating_note({"Use ", "pw <num>", " to enter the pool for that mob."}, LOG_COLORS.INFO, LOG_COLORS.INFO_HIGHLIGHT)
+end
+
+function upcase_first_char(str)
+	return str:sub(1,1):upper() .. str:sub(2)
+end
+
+-- Logging
+LOG_COLORS = {
+	INFO					= "#B274EC",
+	INFO_HIGHLIGHT			= "#7EFF38",
+
+	IMPORTANT				= "#FFFFFF",
+	IMPORTANT_HIGHLIGHT		= "#7EFF38",
+	IMPORTANT_BACKGROUND	= "#471278",
+
+	DEBUG					= "#87CEFA",
+	DEBUG_HIGHLIGHT			= "#FFD700",
+}
+
+function InfoNote(...)
+	log_with_alternating_note({"PlanesWalker: ", ...}, LOG_COLORS.INFO_HIGHLIGHT, LOG_COLORS.INFO)
+end
+
+function ImportantNote(...)
+	log_with_alternating_note({"PlanesWalker: ", ...}, LOG_COLORS.IMPORTANT_HIGHLIGHT, LOG_COLORS.IMPORTANT, LOG_COLORS.IMPORTANT_BACKGROUND)
+end
+
+function DebugNote(...)
+	if debug_mode then
+		log_with_alternating_note({"PlanesWalker DEBUG: ", ...}, LOG_COLORS.DEBUG_HIGHLIGHT, LOG_COLORS.DEBUG)
+	end
+end
+
+function log_with_alternating_note(messages, color1, color2, background)
+	background = background or ""
+
+	for i, message in ipairs(messages) do
+		ColourTell(color1, background, message)
+		color1, color2 = color2, color1
+	end
+	print("")
+end
+
+function reload()
+	Execute(GetAlphaOption("script_prefix") .. "DoAfterSpecial(1, \"ReloadPlugin('" .. GetPluginID() .. "')\", sendto.script)")
+end
+
+function toggle_debug()
+	if debug_mode then
+		DebugNote("Debug mode ", "disabled\n")
+		debug_mode = false
+	else
+		debug_mode = true
+		DebugNote("Debug mode ", "enabled\n")
+	end
+	SetVariable("debug_mode", tostring(debug_mode))
+end
+
+]]>
+</script>
+
+<triggers>
+
+</triggers>
+<aliases>
+	<alias match="^pw pool (?<pool_num>\d+)$"
+		script="enter_pool_alias"
+		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
+
+	<alias match="^pw$"
+		script="enter_first_pool"
+		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
+
+	<alias match="^pw (?<opt>\d+)$"
+		script="choose_pool_option"
+		enabled="y" regexp="y" sequence="200" ignore_case="y" send_to="12" />
+
+	<alias match="^pw (?<name>[a-z].*)$"
+		script="mob_search"
+		enabled="y" regexp="y" sequence="200" ignore_case="y" send_to="12" />
+
+<!-- Development -->
+	<alias match="^pw reload$"
+		script="reload"
+		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
+
+	<alias match="^pw debug$"
+		script="toggle_debug"
+		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
+</aliases>
+</muclient>
