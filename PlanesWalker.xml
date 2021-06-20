@@ -257,8 +257,10 @@ end
 
 function execute_mob_search(target)
 	local matches = {}
+	local search_name = target.name:lower()
+
 	for name, pool in pairs(MOB_LOCATIONS) do
-		if (target.exact and target.name == name) or (not target.exact and name:find(target.name)) then
+		if (target.exact and search_name == name) or (not target.exact and name:find(search_name)) then
 			if type(pool) == "table" then
 				for i, p in ipairs(pool) do
 					table.insert(matches, { name = name, pool = p })
