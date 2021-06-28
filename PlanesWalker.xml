@@ -13,7 +13,7 @@
 	save_state="y"
 	date_written="2021-06-16 21:37:30"
 	requires="5.00"
-	version="1.0"
+	version="1.1"
 	>
 </plugin>
 
@@ -96,10 +96,10 @@ function toboolean(val)
 end
 
 local debug_mode = toboolean(GetVariable("debug_mode") or false)
+local entry_command = GetVariable("entry_command")
 
 local current_target
 local last_pools
-
 
 local search_start_time
 local DELAYED_SEARCH_TIMEOUT = 5 -- 5 seconds
@@ -199,6 +199,9 @@ function enter_pool(pool_num)
 	end
 	Execute(string.format("mapper goto %i", POOL_START_ROOM + pool_num))
 	Execute("enter pool")
+	if entry_command then
+		Execute(entry_command)
+	end
 end
 
 function show_target_list()
@@ -306,7 +309,28 @@ function execute_mob_search(target)
 		print("")
 	end
 	ColourNote("#808080", "", string.rep("-", 36))
-	log_with_alternating_note({"Use ", "pw <num>", " to enter the pool for that mob.\n"}, LOG_COLORS.INFO, LOG_COLORS.INFO_HIGHLIGHT)
+	log_with_alternating_note({"Use ", "pw <num>", " to enter the pool for that mob."}, LOG_COLORS.INFO, LOG_COLORS.INFO_HIGHLIGHT)
+end
+
+function check_entry_command()
+	if entry_command then
+		InfoNote("Your current entry command is ", entry_command, ". This will be executed every time you use PlanesWalker to enter a uplane/lplanes pool. You can change it with ", "pw entry <command>", " or clear it with ", "pw entry clear", ".")
+	else
+		InfoNote("No entry command set. Use ", "pw entry <command>", " to set a command that will be executed after you enter a pool.")
+	end
+end
+
+function set_entry_command(name, line, wildcards)
+	entry_command = wildcards.command
+	if entry_command == "clear" then
+		entry_command = nil
+		InfoNote("Entry command cleared. Use ", "pw entry <command>", " to set a command that will be executed after you enter a pool.")
+		DeleteVariable("entry_command")
+	else
+		InfoNote("Entry command set to ", entry_command, ". This will be executed every time you use PlanesWalker to enter a uplane/lplanes pool. You can clear it with ", "pw entry clear", ".")
+		SetVariable("entry_command", entry_command)
+	end
+	SaveState()
 end
 
 function upcase_first_char(str)
@@ -335,6 +359,12 @@ function show_help()
 	print("")
 	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "pw pool <1-14>",
 		LOG_COLORS.INFO, "", " Runs to and enter the pool with the given number.")
+	print("")
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "pw entry <command>",
+		LOG_COLORS.INFO, "", " Sets a command that is executed automatically when you enter\n    a pool.")
+	print("")
+	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "pw entry",
+		LOG_COLORS.INFO, "", " Check the command to be executed when you enter a pool.")
 	print("")
 	print("")
 	ColourNote(LOG_COLORS.INFO_HIGHLIGHT, "", "NOTE:",
@@ -377,7 +407,7 @@ function log_with_alternating_note(messages, color1, color2, background)
 		ColourTell(color1, background, message)
 		color1, color2 = color2, color1
 	end
-	print("")
+	print("\n")
 end
 
 function reload()
@@ -393,6 +423,7 @@ function toggle_debug()
 		DebugNote("Debug mode ", "enabled\n")
 	end
 	SetVariable("debug_mode", tostring(debug_mode))
+	SaveState()
 end
 
 ]]>
@@ -420,6 +451,14 @@ end
 	<alias match="^pw (?<name>.*)$"
 		script="mob_search"
 		enabled="y" regexp="y" sequence="201" ignore_case="y" send_to="12" />
+
+	<alias match="^pw entry$"
+		script="check_entry_command"
+		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
+
+	<alias match="^pw entry (?<command>.+)$"
+		script="set_entry_command"
+		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
 
 	<alias match="^pw help$"
 		script="show_help"
