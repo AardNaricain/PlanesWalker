@@ -444,7 +444,7 @@ end
 		script="show_target_list"
 		enabled="y" regexp="y" sequence="100" ignore_case="y" send_to="12" />
 
-	<alias match="^pw (?<opt>\d+)$"
+	<alias match="^pw ?(?<opt>\d+)$"
 		script="choose_pool_option"
 		enabled="y" regexp="y" sequence="200" ignore_case="y" send_to="12" />
 
